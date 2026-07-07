@@ -24,6 +24,13 @@ from shadow4.beamline.optical_elements.absorbers.s4_screen import S4Screen
 from shadow4.beamline.optical_elements.compound.s4_compound import S4Compound
 
 
+UNSUPPORTED_PARALLEL_SOURCE_MESSAGE = (
+    "SourceGridCartesian and SourceGridPolar are deterministic grid sources "
+    "and do not support packed or parallel repeated beamline generation. They do not expose "
+    "a usable Monte Carlo seed, so repeated calculations cannot generate independent runs."
+)
+
+
 
 
 class S4Beamline(Beamline):
@@ -340,8 +347,12 @@ class S4Beamline(Beamline):
     @staticmethod
     def _get_parallel_runner_prototype(beamline):
         from shadow4.sources.s4_light_source_from_beamlines import S4LightSourceFromBeamlines
+        from shadow4.sources.source_geometrical.source_grid_cartesian import SourceGridCartesian
+        from shadow4.sources.source_geometrical.source_grid_polar import SourceGridPolar
 
         light_source = beamline.get_light_source()
+        prototype_beamline = beamline
+        number_of_repetitions = 1
 
         if isinstance(light_source, S4LightSourceFromBeamlines):
             beamlines = light_source._beamlines
@@ -349,9 +360,14 @@ class S4Beamline(Beamline):
             if len(beamlines) == 0:
                 raise ValueError("Accumulated beamline has no child beamlines.")
 
-            return beamlines[0], len(beamlines)
+            prototype_beamline = beamlines[0]
+            number_of_repetitions = len(beamlines)
+            light_source = prototype_beamline.get_light_source()
 
-        return beamline, 1
+        if isinstance(light_source, (SourceGridCartesian, SourceGridPolar)):
+            raise ValueError(UNSUPPORTED_PARALLEL_SOURCE_MESSAGE)
+
+        return prototype_beamline, number_of_repetitions
 
     @staticmethod
     def _get_default_nrays_from_light_source_or_code(light_source, code_text):
