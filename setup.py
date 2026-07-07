@@ -85,6 +85,7 @@ INSTALL_REQUIRES = (
     'syned>=1.0.56',
     'srxraylib>=1.0.67',
     'crystalpy>=0.0.26',
+    'joblib',
 )
 
 README_FILE = os.path.join(os.path.dirname(__file__), 'README.rst')
@@ -102,4 +103,3 @@ setup(name='shadow4',
       packages=PACKAGES,
       install_requires=INSTALL_REQUIRES,
      )
-
