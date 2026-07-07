@@ -141,28 +141,16 @@ class S4LightSourceFromBeamlines(EmptyLightSource):
         """
 
         n = self.number_of_beamlines()
-        txt = ""
-
-        for i in range(n):
-            script_i = self._beamlines[i].to_python_code_packed(
-                add_head="def dry_run_beamline_%d():" % (i + 1),
-                add_in_lightsource=None,
-                add_return="return beamline",
-                add_main="",
-                filename="",
-                dry_run=True)
-
-            txt += script_i
-            txt += "\n\n"
-
-
-        txt += "\n#\n#\n#"
+        txt = "\n#\n#\n#"
         txt += "\nfrom shadow4.sources.s4_light_source_from_beamlines import S4LightSourceFromBeamlines"
         txt += "\nlight_source = S4LightSourceFromBeamlines(name='%s')" % (self.get_name())
         txt += "\n"
+
         for i in range(n):
-            txt += "\nlight_source.append_beamline(dry_run_beamline_%d(), id='%s', weight=%f)" % \
-                   (i + 1, self._ids[i], self._weights[i])
+            txt += "\n\n"
+            txt += self._beamlines[i].to_python_code_packed(filename="")
+            txt += "\nlight_source.append_beamline(trace_beamline(dry_run=True, return_beamline=True)[3], id='%s', weight=%f)" % \
+                   (self._ids[i], self._weights[i])
 
         txt += "\nbeam = light_source.get_beam()"
         return txt
@@ -248,4 +236,3 @@ if __name__ == "__main__":
     beam = a.get_beam()
     print(beam, beam.N)
     print('script: ', a.to_python_code())
-
