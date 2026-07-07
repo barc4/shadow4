@@ -171,6 +171,7 @@ class S4Beamline(Beamline):
                                 number_of_repetitions=None,
                                 number_of_rays=None,
                                 n_jobs=-1,
+                                base_seed=None,
                                 output_file="s4_beam.h5",
                                 filename=""):
         """
@@ -185,6 +186,8 @@ class S4Beamline(Beamline):
             Number of rays per repetition. If None, use the prototype light source value.
         n_jobs : int, optional
             Number of joblib workers. Default -1 uses all CPUs reported by joblib.
+        base_seed : int, optional
+            Base seed used to generate the repeated beamline seeds. If None, use the prototype light source seed.
         output_file : str, optional
             HDF5 output file used by the generated __main__ block.
         filename : str, optional
@@ -198,7 +201,7 @@ class S4Beamline(Beamline):
 
         prototype_beamline, number_of_repetitions_from_beamline = self._get_parallel_runner_prototype(self)
         light_source = prototype_beamline.get_light_source()
-        default_seed = int(light_source.get_seed())
+        default_seed = int(base_seed) if base_seed is not None else int(light_source.get_seed())
         default_nrays = int(light_source.get_nrays())
         default_number_of_repetitions = (
             int(number_of_repetitions)
@@ -268,6 +271,26 @@ class S4Beamline(Beamline):
         final_script += "            print(\"Iteration %d: seed=%d, rays=%d\" % (i, seed_list[i], beam_list[i].N))\n\n"
         final_script += "    return beam_acc, footprint_acc\n\n\n"
 
+        final_script += "def build_accumulated_beamline(seed_list, number_of_rays):\n"
+        final_script += "    from shadow4.beamline.s4_beamline import S4Beamline\n"
+        final_script += "    from shadow4.sources.s4_light_source_from_beamlines import S4LightSourceFromBeamlines\n\n"
+        final_script += "    light_source_acc = S4LightSourceFromBeamlines(name=\"Accumulate Parallel Run\")\n\n"
+        final_script += "    for seed in seed_list:\n"
+        final_script += "        _, _, _, beamline = trace_beamline(\n"
+        final_script += "            seed=seed,\n"
+        final_script += "            nrays=number_of_rays,\n"
+        final_script += "            dry_run=True,\n"
+        final_script += "            return_beamline=True,\n"
+        final_script += "        )\n"
+        final_script += "        light_source_acc.append_beamline(\n"
+        final_script += "            beamline,\n"
+        final_script += "            id=\"beamline seed: %d\" % seed,\n"
+        final_script += "            weight=1.0,\n"
+        final_script += "        )\n\n"
+        final_script += "    beamline_acc = S4Beamline()\n"
+        final_script += "    beamline_acc.set_light_source(light_source_acc)\n"
+        final_script += "    return beamline_acc\n\n\n"
+
         final_script += "def run_parallel(number_of_repetitions=%d, number_of_rays=%d, n_jobs=%d, base_seed=%d):\n" % (
             default_number_of_repetitions,
             default_number_of_rays,
@@ -303,19 +326,14 @@ class S4Beamline(Beamline):
         final_script += "        seed_list,\n"
         final_script += "        verbose=True,\n"
         final_script += "    )\n"
-        final_script += "    _, _, _, beamline = trace_beamline(\n"
-        final_script += "        seed=base_seed,\n"
-        final_script += "        nrays=number_of_rays,\n"
-        final_script += "        dry_run=True,\n"
-        final_script += "        return_beamline=True,\n"
-        final_script += "    )\n"
+        final_script += "    beamline_acc = build_accumulated_beamline(seed_list, number_of_rays)\n"
         final_script += "    concatenate_elapsed = time.perf_counter() - t_concatenate\n\n"
         final_script += "    print(\"\")\n"
         final_script += "    print(\"Parallel elapsed: %.3f s\" % parallel_elapsed)\n"
         final_script += "    print(\"Concatenation elapsed: %.3f s\" % concatenate_elapsed)\n"
         final_script += "    print(\"Total elapsed: %.3f s\" % (time.perf_counter() - t_total))\n"
         final_script += "    print(\"Accumulated rays:\", beam_acc.N)\n\n"
-        final_script += "    return beamline, beam_acc, footprint_acc\n\n\n"
+        final_script += "    return seed_list, beamline_acc, beam_acc, footprint_acc\n\n\n"
 
         final_script += "if __name__ == \"__main__\":\n"
         final_script += "    number_of_repetitions = %d\n" % default_number_of_repetitions
@@ -323,7 +341,7 @@ class S4Beamline(Beamline):
         final_script += "    n_jobs = %d\n" % default_n_jobs
         final_script += "    base_seed = %d\n" % default_seed
         final_script += "    output_file = %r\n\n" % output_file
-        final_script += "    beamline, beam_acc, footprint_acc = run_parallel(\n"
+        final_script += "    seed_list, beamline_acc, beam_acc, footprint_acc = run_parallel(\n"
         final_script += "        number_of_repetitions=number_of_repetitions,\n"
         final_script += "        number_of_rays=number_of_rays,\n"
         final_script += "        n_jobs=n_jobs,\n"
