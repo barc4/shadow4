@@ -74,9 +74,7 @@ class S4Beamline(Beamline):
         self._beamline_elements_list.append(beamline_element)
 
 
-    def to_python_code_packed(self,
-                              filename="",
-                              dry_run=False):
+    def to_python_code_packed(self, filename="",):
         """
         Returns the python code of to_python_code() wrapped (packed) inside a function.
 
@@ -88,18 +86,12 @@ class S4Beamline(Beamline):
         ----------
         filename : str, optional
             If not empty, the generated code is also written to this file. Default "" (not written).
-        dry_run : bool, optional
-            If True, replace source and beamline element tracing calls with placeholders.
 
         Returns
         -------
         str
             The python code.
 
-        Raises
-        ------
-        ValueError
-            If the beamline code does not contain exactly one source seed or nrays assignment.
         """
 
         prototype_beamline, _ = self._get_parallel_runner_prototype(self)
@@ -107,7 +99,7 @@ class S4Beamline(Beamline):
 
         light_source = prototype_beamline.get_light_source()
         default_seed = int(light_source.get_seed())
-        default_nrays = self._get_default_nrays_from_light_source_or_code(light_source, script)
+        default_nrays = int(light_source.get_nrays())
 
         script, nrays_replacements = re.subn(
             r"(\bnrays\s*=\s*)[-+]?\d+",
@@ -128,15 +120,31 @@ class S4Beamline(Beamline):
         if nrays_replacements != 1:
             raise ValueError("Expected exactly one source nrays assignment, found %d." % nrays_replacements)
 
+        script = script.replace(
+            "beam = light_source.get_beam()",
+            "if dry_run:\n"
+            "    beam = None\n"
+            "else:\n"
+            "    beam = light_source.get_beam()",
+        )
+
+        script = script.replace(
+            "beam, footprint = beamline_element.trace_beam()",
+            "if dry_run:\n"
+            "    beam, footprint = None, None\n"
+            "else:\n"
+            "    beam, footprint = beamline_element.trace_beam()",
+        )
+
         indented_script = '\n'.join('    ' + line for line in script.splitlines())
 
         final_script = "import numpy as np\n\n"
-        final_script += "def trace_beamline(seed=%d, nrays=%d, return_beamline=False):\n" % (default_seed, default_nrays)
-        final_script += "    beam, footprint = None, None\n"
-        final_script += "    if nrays is None:\n"
-        final_script += "        nrays = %d\n\n" % default_nrays
-        final_script += indented_script
+        final_script += "def trace_beamline(seed=%d, nrays=%d, dry_run=False, return_beamline=False):\n" % (default_seed, default_nrays)
         final_script += "\n"
+        final_script += "    beam, footprint = None, None\n"
+        final_script += "\n"
+        final_script += indented_script
+        final_script += "\n\n"
         final_script += "    if beam is not None:\n"
         final_script += "        beam.clean_lost_rays()\n"
         final_script += "    if footprint is not None:\n"
@@ -145,17 +153,6 @@ class S4Beamline(Beamline):
         final_script += "        return seed, beam, footprint, beamline\n"
         final_script += "    return seed, beam, footprint"
         final_script += "\n\n"
-
-        if dry_run:
-            final_script = final_script.replace(
-                "beam = light_source.get_beam()",
-                "beam = None # (dry) beam = light_source.get_beam()"
-            )
-
-            final_script = final_script.replace(
-                "beam, footprint = beamline_element.trace_beam()",
-                "beam, footprint = None, None # (dry) beam, footprint = beamline_element.trace_beam()"
-            )
 
         if filename != "":
             with open(filename, "w", encoding="utf-8") as f:
