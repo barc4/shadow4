@@ -10,9 +10,8 @@ from joblib import Parallel, delayed
 
 
 UNSUPPORTED_PARALLEL_SOURCE_MESSAGE = (
-    "SourceGridCartesian and SourceGridPolar are deterministic grid sources "
-    "and do not support parallel repetitions. They do not expose a usable "
-    "Monte Carlo seed, so parallel calculation cannot generate independent runs."
+    "S4LightSourceFromBeamlines, S4LightSourceFromFile, SourceGridCartesian and SourceGridPolar"
+    " are deterministic sources and do not support parallel repetitions. "
 )
 
 
@@ -42,34 +41,20 @@ def load_runner_module(module_path):
     return importlib.import_module(module_name)
 
 
-def validate_parallel_beamline(beamline):
-    prototype_beamline, _ = get_parallel_runner_prototype(beamline)
-    return prototype_beamline
-
-
 def get_parallel_runner_prototype(beamline):
     from shadow4.sources.s4_light_source_from_beamlines import S4LightSourceFromBeamlines
     from shadow4.sources.source_geometrical.source_grid_cartesian import SourceGridCartesian
     from shadow4.sources.source_geometrical.source_grid_polar import SourceGridPolar
+    from shadow4.sources.s4_light_source_from_file import S4LightSourceFromFile
 
     light_source = beamline.get_light_source()
     prototype_beamline = beamline
-    number_of_repetitions = 1
 
-    if isinstance(light_source, S4LightSourceFromBeamlines):
-        beamlines = light_source._beamlines
-
-        if len(beamlines) == 0:
-            raise ValueError("Accumulated beamline has no child beamlines.")
-
-        prototype_beamline = beamlines[0]
-        number_of_repetitions = len(beamlines)
-        light_source = prototype_beamline.get_light_source()
-
-    if isinstance(light_source, (SourceGridCartesian, SourceGridPolar)):
+    if isinstance(light_source, (SourceGridCartesian, SourceGridPolar, 
+                                 S4LightSourceFromFile, S4LightSourceFromBeamlines)):
         raise ValueError(UNSUPPORTED_PARALLEL_SOURCE_MESSAGE)
 
-    return prototype_beamline, number_of_repetitions
+    return prototype_beamline
 
 
 def cpu_info_text():
