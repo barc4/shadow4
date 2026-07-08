@@ -24,15 +24,6 @@ from shadow4.beamline.optical_elements.absorbers.s4_screen import S4Screen
 from shadow4.beamline.optical_elements.compound.s4_compound import S4Compound
 
 
-UNSUPPORTED_PARALLEL_SOURCE_MESSAGE = (
-    "SourceGridCartesian and SourceGridPolar are deterministic grid sources "
-    "and do not support packed or parallel repeated beamline generation. They do not expose "
-    "a usable Monte Carlo seed, so repeated calculations cannot generate independent runs."
-)
-
-
-
-
 class S4Beamline(Beamline):
     """
     Constructor.
@@ -101,7 +92,9 @@ class S4Beamline(Beamline):
 
         """
 
-        prototype_beamline, _ = self._get_parallel_runner_prototype(self)
+        from shadow4.tools.parallel import get_parallel_runner_prototype
+
+        prototype_beamline, _ = get_parallel_runner_prototype(self)
         script = prototype_beamline.to_python_code()
 
         light_source = prototype_beamline.get_light_source()
@@ -199,7 +192,9 @@ class S4Beamline(Beamline):
             The python code.
         """
 
-        prototype_beamline, number_of_repetitions_from_beamline = self._get_parallel_runner_prototype(self)
+        from shadow4.tools.parallel import get_parallel_runner_prototype
+
+        prototype_beamline, number_of_repetitions_from_beamline = get_parallel_runner_prototype(self)
         light_source = prototype_beamline.get_light_source()
         default_seed = int(base_seed) if base_seed is not None else int(light_source.get_seed())
         default_nrays = int(light_source.get_nrays())
@@ -216,124 +211,29 @@ class S4Beamline(Beamline):
         default_n_jobs = int(n_jobs)
 
         final_script = "# Auto-generated from Shadow4 S4Beamline.to_python_code_parallel().\n\n"
-        final_script += "import multiprocessing\n"
-        final_script += "import os\n"
-        final_script += "import time\n\n"
-        final_script += "import joblib\n"
-        final_script += "from joblib import Parallel, delayed\n\n\n"
+        final_script += "from shadow4.tools.parallel import run_parallel_from_generated_script\n\n\n"
 
         final_script += prototype_beamline.to_python_code_packed(filename="")
+        final_script += "\n"
+        final_script += "# --------------------------------------------------------------------------------------\n"
+        final_script += "# --------------------------------------------------------------------------------------\n"
+        final_script += "# --------------------------------------------------------------------------------------\n"
+
         final_script += "\n\n"
-
-        final_script += "def cpu_info_text():\n"
-        final_script += "    lines = [\n"
-        final_script += "        \"CPU availability:\",\n"
-        final_script += "        \"    os.cpu_count(): %s\" % os.cpu_count(),\n"
-        final_script += "        \"    multiprocessing.cpu_count(): %s\" % multiprocessing.cpu_count(),\n"
-        final_script += "        \"    joblib.cpu_count(): %s\" % joblib.cpu_count(),\n"
-        final_script += "    ]\n\n"
-        final_script += "    try:\n"
-        final_script += "        lines.append(\"\\n    CPU affinity: %s\" % len(os.sched_getaffinity(0)))\n"
-        final_script += "    except AttributeError:\n"
-        final_script += "        lines.append(\"    CPU affinity: not available on this OS\")\n\n"
-        final_script += "    return \"\\n\".join(lines)\n\n\n"
-
-        final_script += "def print_cpu_info():\n"
-        final_script += "    text = cpu_info_text()\n"
-        final_script += "    print(text)\n"
-        final_script += "    return text\n\n\n"
-
-        final_script += "def runner_module_path():\n"
-        final_script += "    file_name = globals().get(\"__file__\")\n"
-        final_script += "    if file_name is None:\n"
-        final_script += "        return \"<interactive Shadow4 script>\"\n"
-        final_script += "    return os.path.abspath(file_name)\n\n\n"
-
-        final_script += "def seed_for_iteration(base_seed, iteration):\n"
-        final_script += "    if base_seed == 0:\n"
-        final_script += "        return 0\n"
-        final_script += "    return int(base_seed + iteration * 2)\n\n\n"
-
-        final_script += "def concatenate_beams(beam_list, footprint_list, seed_list, verbose=True):\n"
-        final_script += "    ntimes = len(seed_list)\n"
-        final_script += "    for i in range(ntimes):\n\n"
-        final_script += "        beam_list[i].clean_lost_rays()\n"
-        final_script += "        if footprint_list[i] is not None:\n"
-        final_script += "            footprint_list[i].clean_lost_rays()\n\n"
-        final_script += "        if i == 0:\n"
-        final_script += "            beam_acc = beam_list[i].duplicate()\n"
-        final_script += "            footprint_acc = None if footprint_list[i] is None else footprint_list[i].duplicate()\n"
-        final_script += "        else:\n"
-        final_script += "            beam_acc.append_beam(beam_list[i])\n"
-        final_script += "            if footprint_acc is not None and footprint_list[i] is not None:\n"
-        final_script += "                footprint_acc.append_beam(footprint_list[i])\n\n"
-        final_script += "        if verbose:\n"
-        final_script += "            print(\"Iteration %d: seed=%d, rays=%d\" % (i, seed_list[i], beam_list[i].N))\n\n"
-        final_script += "    return beam_acc, footprint_acc\n\n\n"
-
-        final_script += "def build_accumulated_beamline(seed_list, number_of_rays):\n"
-        final_script += "    from shadow4.beamline.s4_beamline import S4Beamline\n"
-        final_script += "    from shadow4.sources.s4_light_source_from_beamlines import S4LightSourceFromBeamlines\n\n"
-        final_script += "    light_source_acc = S4LightSourceFromBeamlines(name=\"Accumulate Parallel Run\")\n\n"
-        final_script += "    for seed in seed_list:\n"
-        final_script += "        _, _, _, beamline = trace_beamline(\n"
-        final_script += "            seed=seed,\n"
-        final_script += "            nrays=number_of_rays,\n"
-        final_script += "            dry_run=True,\n"
-        final_script += "            return_beamline=True,\n"
-        final_script += "        )\n"
-        final_script += "        light_source_acc.append_beamline(\n"
-        final_script += "            beamline,\n"
-        final_script += "            id=\"beamline seed: %d\" % seed,\n"
-        final_script += "            weight=1.0,\n"
-        final_script += "        )\n\n"
-        final_script += "    beamline_acc = S4Beamline()\n"
-        final_script += "    beamline_acc.set_light_source(light_source_acc)\n"
-        final_script += "    return beamline_acc\n\n\n"
-
         final_script += "def run_parallel(number_of_repetitions=%d, number_of_rays=%d, n_jobs=%d, base_seed=%d):\n" % (
             default_number_of_repetitions,
             default_number_of_rays,
             default_n_jobs,
             default_seed,
         )
-        final_script += "    t_total = time.perf_counter()\n\n"
-        final_script += "    print_cpu_info()\n"
-        final_script += "    print(\"\")\n"
-        final_script += "    print(\"Number of repetitions:\", number_of_repetitions)\n"
-        final_script += "    print(\"Number of rays:\", number_of_rays)\n"
-        final_script += "    print(\"Base seed:\", base_seed)\n"
-        final_script += "    if n_jobs == -1:\n"
-        final_script += "        n_jobs = joblib.cpu_count()\n"
-        final_script += "    print(\"Number of cores:\", n_jobs)\n\n"
-        final_script += "    print(\"\")\n"
-        final_script += "    print(\"Runner module:\", runner_module_path())\n"
-        final_script += "    print(\"\")\n\n"
-        final_script += "    seed_list = [seed_for_iteration(base_seed, i) for i in range(number_of_repetitions)]\n\n"
-        final_script += "    t_parallel = time.perf_counter()\n"
-        final_script += "    results = Parallel(n_jobs=n_jobs, backend=\"loky\")(\n"
-        final_script += "        delayed(trace_beamline)(seed=seed, nrays=number_of_rays)\n"
-        final_script += "        for seed in seed_list\n"
-        final_script += "    )\n"
-        final_script += "    parallel_elapsed = time.perf_counter() - t_parallel\n\n"
-        final_script += "    seed_list = [result[0] for result in results]\n"
-        final_script += "    beam_list = [result[1] for result in results]\n"
-        final_script += "    footprint_list = [result[2] for result in results]\n\n"
-        final_script += "    t_concatenate = time.perf_counter()\n"
-        final_script += "    beam_acc, footprint_acc = concatenate_beams(\n"
-        final_script += "        beam_list,\n"
-        final_script += "        footprint_list,\n"
-        final_script += "        seed_list,\n"
-        final_script += "        verbose=True,\n"
-        final_script += "    )\n"
-        final_script += "    beamline_acc = build_accumulated_beamline(seed_list, number_of_rays)\n"
-        final_script += "    concatenate_elapsed = time.perf_counter() - t_concatenate\n\n"
-        final_script += "    print(\"\")\n"
-        final_script += "    print(\"Parallel elapsed: %.3f s\" % parallel_elapsed)\n"
-        final_script += "    print(\"Concatenation elapsed: %.3f s\" % concatenate_elapsed)\n"
-        final_script += "    print(\"Total elapsed: %.3f s\" % (time.perf_counter() - t_total))\n"
-        final_script += "    print(\"Accumulated rays:\", beam_acc.N)\n\n"
-        final_script += "    return seed_list, beamline_acc, beam_acc, footprint_acc\n\n\n"
+        final_script += "    return run_parallel_from_generated_script(\n"
+        final_script += "        trace_beamline=trace_beamline,\n"
+        final_script += "        script_file=globals().get(\"__file__\"),\n"
+        final_script += "        number_of_repetitions=number_of_repetitions,\n"
+        final_script += "        number_of_rays=number_of_rays,\n"
+        final_script += "        n_jobs=n_jobs,\n"
+        final_script += "        base_seed=base_seed,\n"
+        final_script += "    )\n\n\n"
 
         final_script += "if __name__ == \"__main__\":\n"
         final_script += "    number_of_repetitions = %d\n" % default_number_of_repetitions
@@ -361,31 +261,6 @@ class S4Beamline(Beamline):
                 f.write(final_script)
                 print("File %s written to disk." % filename)
         return final_script
-
-    @staticmethod
-    def _get_parallel_runner_prototype(beamline):
-        from shadow4.sources.s4_light_source_from_beamlines import S4LightSourceFromBeamlines
-        from shadow4.sources.source_geometrical.source_grid_cartesian import SourceGridCartesian
-        from shadow4.sources.source_geometrical.source_grid_polar import SourceGridPolar
-
-        light_source = beamline.get_light_source()
-        prototype_beamline = beamline
-        number_of_repetitions = 1
-
-        if isinstance(light_source, S4LightSourceFromBeamlines):
-            beamlines = light_source._beamlines
-
-            if len(beamlines) == 0:
-                raise ValueError("Accumulated beamline has no child beamlines.")
-
-            prototype_beamline = beamlines[0]
-            number_of_repetitions = len(beamlines)
-            light_source = prototype_beamline.get_light_source()
-
-        if isinstance(light_source, (SourceGridCartesian, SourceGridPolar)):
-            raise ValueError(UNSUPPORTED_PARALLEL_SOURCE_MESSAGE)
-
-        return prototype_beamline, number_of_repetitions
 
     @staticmethod
     def _get_default_nrays_from_light_source_or_code(light_source, code_text):
