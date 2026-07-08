@@ -1,11 +1,19 @@
 import importlib
 import multiprocessing
 import os
+import pathlib
 import sys
 import time
 
 import joblib
 from joblib import Parallel, delayed
+
+
+UNSUPPORTED_PARALLEL_SOURCE_MESSAGE = (
+    "SourceGridCartesian and SourceGridPolar are deterministic grid sources "
+    "and do not support parallel repetitions. They do not expose a usable "
+    "Monte Carlo seed, so parallel calculation cannot generate independent runs."
+)
 
 
 def run_generated_trace(module_name, module_dir, seed, nrays):
@@ -17,6 +25,51 @@ def run_generated_trace(module_name, module_dir, seed, nrays):
     importlib.invalidate_caches()
     module = importlib.import_module(module_name)
     return module.trace_beamline(seed=seed, nrays=nrays)
+
+
+def load_runner_module(module_path):
+    module_path = pathlib.Path(module_path).resolve()
+    module_dir = str(module_path.parent)
+    module_name = module_path.stem
+
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
+
+    importlib.invalidate_caches()
+    if module_name in sys.modules:
+        del sys.modules[module_name]
+
+    return importlib.import_module(module_name)
+
+
+def validate_parallel_beamline(beamline):
+    prototype_beamline, _ = get_parallel_runner_prototype(beamline)
+    return prototype_beamline
+
+
+def get_parallel_runner_prototype(beamline):
+    from shadow4.sources.s4_light_source_from_beamlines import S4LightSourceFromBeamlines
+    from shadow4.sources.source_geometrical.source_grid_cartesian import SourceGridCartesian
+    from shadow4.sources.source_geometrical.source_grid_polar import SourceGridPolar
+
+    light_source = beamline.get_light_source()
+    prototype_beamline = beamline
+    number_of_repetitions = 1
+
+    if isinstance(light_source, S4LightSourceFromBeamlines):
+        beamlines = light_source._beamlines
+
+        if len(beamlines) == 0:
+            raise ValueError("Accumulated beamline has no child beamlines.")
+
+        prototype_beamline = beamlines[0]
+        number_of_repetitions = len(beamlines)
+        light_source = prototype_beamline.get_light_source()
+
+    if isinstance(light_source, (SourceGridCartesian, SourceGridPolar)):
+        raise ValueError(UNSUPPORTED_PARALLEL_SOURCE_MESSAGE)
+
+    return prototype_beamline, number_of_repetitions
 
 
 def cpu_info_text():
