@@ -71,17 +71,36 @@ class S4Beamline(Beamline):
         """
         self._beamline_elements_list.append(beamline_element)
 
-
-    def to_python_code_packed(self, filename="",):
+    def to_python_code_packed(self,
+                              add_head="def run_beamline():",
+                              add_in_lightsource=None,
+                              add_return="return beam, footprint",
+                              add_main="",
+                              filename="",
+                              dry_run=False):
         """
         Returns the python code of to_python_code() wrapped (packed) inside a function.
 
-        The full beamline script (see to_python_code) is indented and placed inside a function definition
-        so the beamline can be built and traced by calling that function. The generated function accepts
-        optional seed and nrays arguments.
+        The full beamline script (see to_python_code) is indented and placed inside a function definition,
+        so the beamline can be built and run by calling that function. Optional code can be injected right
+        after the light source is created and before its beam is generated ("beam = light_source.get_beam()"),
+        which is the place to reassign, e.g., the number of rays or the seed before running.
 
         Parameters
         ----------
+        add_head : str, optional
+            The function definition line. Default "def run_beamline():". Use it to declare arguments, e.g.
+            "def run_beamline(nrays=None, seed=None):".
+        add_in_lightsource : None or str, optional
+            Code injected after the light source creation and before "beam = light_source.get_beam()", with
+            one statement per line. Typically used to reassign nrays/seed, e.g.
+            "if nrays is not None: light_source.set_nrays(nrays)". A trailing newline is added if missing.
+            If None (default) no text added.
+        add_return : str, optional
+            The return statement added at the end of the function body. Default "return beam, footprint".
+        add_main : str, optional
+            Code appended at module level after the function definition (e.g. a __main__ block or a call to
+            the function). Default "" (nothing added).
         filename : str, optional
             If not empty, the generated code is also written to this file. Default "" (not written).
 
@@ -90,17 +109,112 @@ class S4Beamline(Beamline):
         str
             The python code.
 
+        Raises
+        ------
+        ValueError
+            If the beamline code does not contain exactly one "beam = light_source.get_beam()" line to
+            inject before.
+        """
+
+        script = self.to_python_code()
+
+        if add_in_lightsource is not None:
+            if script.count("beam = light_source.get_beam()") != 1:
+                raise ValueError("Expected exactly one 'beam = light_source.get_beam()' to inject before, found %d." %
+                                 script.count("beam = light_source.get_beam()"))
+
+            # ensure the injected block ends with a newline so it does not merge with the get_beam() line
+            if add_in_lightsource != "" and not add_in_lightsource.endswith("\n"):
+                add_in_lightsource += "\n"
+
+            script = script.replace(
+                "beam = light_source.get_beam()",
+                "#new commands inserted here\n" + add_in_lightsource + "\n" + "beam = light_source.get_beam()"
+            )
+
+
+        indented_script = '\n'.join('    ' + line for line in script.splitlines())
+
+        final_script = "import numpy as np\n\n"
+        final_script += add_head + "\n"
+        final_script += indented_script
+        indented_return = '\n'.join('    ' + line for line in add_return.splitlines())
+        final_script += "\n" + indented_return
+        final_script += "\n\n" + add_main
+        final_script += "\n\n"
+
+        if dry_run:
+            final_script = final_script.replace(
+                "beam = light_source.get_beam()",
+                "beam = None # (dry) beam = light_source.get_beam()"
+            )
+
+            final_script = final_script.replace(
+                "beam, footprint = beamline_element.trace_beam()",
+                "beam, footprint = None, None # (dry) beam, footprint = beamline_element.trace_beam()"
+            )
+
+        if filename != "":
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(final_script)
+                print("File %s written to disk." % filename)
+        return final_script
+
+    def to_python_code_parallel(self,
+                                number_of_repetitions=None,
+                                number_of_rays=None,
+                                n_jobs=-1,
+                                base_seed=None,
+                                output_file="s4_beam.h5",
+                                filename=""):
+        """
+        Returns standalone python code to trace repeated beamline realizations in parallel.
+
+        Parameters
+        ----------
+        number_of_repetitions : int
+            Number of repeated beamline traces.
+        number_of_rays : int
+            Number of rays per repetition.
+        n_jobs : int, optional
+            Number of joblib workers. Default -1 uses all CPUs reported by joblib.
+        base_seed : int, optional
+            Base seed used to generate the repeated beamline seeds. If None, use the prototype light source seed.
+        output_file : str, optional
+            HDF5 output file used by the generated __main__ block.
+        filename : str, optional
+            If not empty, the generated code is also written to this file. Default "" (not written).
+
+        Returns
+        -------
+        str
+            The python code.
         """
 
         from shadow4.tools.parallel import get_parallel_runner_prototype
 
-        prototype_beamline, _ = get_parallel_runner_prototype(self)
-        script = prototype_beamline.to_python_code()
+        prototype_beamline = get_parallel_runner_prototype(self)
 
         light_source = prototype_beamline.get_light_source()
-        default_seed = int(light_source.get_seed())
+        default_seed = int(base_seed) if base_seed is not None else int(light_source.get_seed())
         default_nrays = int(light_source.get_nrays())
 
+        if number_of_repetitions is None:
+            raise ValueError("number_of_repetitions is required.")
+        default_number_of_repetitions = int(number_of_repetitions)
+
+        default_number_of_rays = (
+            int(number_of_rays)
+            if number_of_rays is not None
+            else int(default_nrays)
+        )
+
+        default_n_jobs = int(n_jobs)
+
+        final_script = "# Auto-generated from Shadow4 S4Beamline.to_python_code_parallel().\n\n"
+        final_script += "from shadow4.tools.parallel import run_parallel_from_generated_script\n\n\n"
+
+        script = prototype_beamline.to_python_code()
         script, nrays_replacements = re.subn(
             r"(\bnrays\s*=\s*)[-+]?\d+",
             r"\1nrays",
@@ -138,7 +252,6 @@ class S4Beamline(Beamline):
 
         indented_script = '\n'.join('    ' + line for line in script.splitlines())
 
-        final_script = "" #import numpy as np\n\n"
         final_script += "def trace_beamline(seed=%d, nrays=%d, dry_run=False, return_beamline=False):\n" % (default_seed, default_nrays)
         final_script += "\n"
         final_script += "    beam, footprint = None, None\n"
@@ -149,71 +262,10 @@ class S4Beamline(Beamline):
         final_script += "        beam.clean_lost_rays()\n"
         final_script += "    if footprint is not None:\n"
         final_script += "        footprint.clean_lost_rays()\n\n"
-        final_script += "    if return_beamline:\n"
-        final_script += "        return seed, beam, footprint, beamline\n"
-        final_script += "    return seed, beam, footprint"
+        final_script += "    if not return_beamline:\n"
+        final_script += "        beamline = None\n"
+        final_script += "    return seed, beam, footprint, beamline"
         final_script += "\n\n"
-
-        if filename != "":
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(final_script)
-                print("File %s written to disk." % filename)
-        return final_script
-
-    def to_python_code_parallel(self,
-                                number_of_repetitions=None,
-                                number_of_rays=None,
-                                n_jobs=-1,
-                                base_seed=None,
-                                output_file="s4_beam.h5",
-                                filename=""):
-        """
-        Returns standalone python code to trace repeated beamline realizations in parallel.
-
-        Parameters
-        ----------
-        number_of_repetitions : int, optional
-            Number of repeated beamline traces. If None, use 1 for a normal beamline or the number of
-            child beamlines when the light source is an S4LightSourceFromBeamlines.
-        number_of_rays : int, optional
-            Number of rays per repetition. If None, use the prototype light source value.
-        n_jobs : int, optional
-            Number of joblib workers. Default -1 uses all CPUs reported by joblib.
-        base_seed : int, optional
-            Base seed used to generate the repeated beamline seeds. If None, use the prototype light source seed.
-        output_file : str, optional
-            HDF5 output file used by the generated __main__ block.
-        filename : str, optional
-            If not empty, the generated code is also written to this file. Default "" (not written).
-
-        Returns
-        -------
-        str
-            The python code.
-        """
-
-        from shadow4.tools.parallel import get_parallel_runner_prototype
-
-        prototype_beamline, number_of_repetitions_from_beamline = get_parallel_runner_prototype(self)
-        light_source = prototype_beamline.get_light_source()
-        default_seed = int(base_seed) if base_seed is not None else int(light_source.get_seed())
-        default_nrays = int(light_source.get_nrays())
-        default_number_of_repetitions = (
-            int(number_of_repetitions)
-            if number_of_repetitions is not None
-            else int(number_of_repetitions_from_beamline)
-        )
-        default_number_of_rays = (
-            int(number_of_rays)
-            if number_of_rays is not None
-            else int(default_nrays)
-        )
-        default_n_jobs = int(n_jobs)
-
-        final_script = "# Auto-generated from Shadow4 S4Beamline.to_python_code_parallel().\n\n"
-        final_script += "from shadow4.tools.parallel import run_parallel_from_generated_script\n\n\n"
-
-        final_script += prototype_beamline.to_python_code_packed(filename="")
         final_script += "\n"
         final_script += "# --------------------------------------------------------------------------------------\n"
         final_script += "# --------------------------------------------------------------------------------------\n"
@@ -272,8 +324,6 @@ class S4Beamline(Beamline):
             raise ValueError("Could not determine the number of rays from the light source.")
 
         return int(nrays_match.group(1))
-
-
 
     def to_python_code(self, **kwargs):
         """
